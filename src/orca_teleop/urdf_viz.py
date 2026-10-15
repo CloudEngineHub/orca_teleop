@@ -20,38 +20,17 @@ from orca_core import OrcaHand, OrcaJointPositions
 
 from orca_teleop.pipeline import _SHUTDOWN, RobotSink
 from orca_teleop.retargeting.urdf_offsets import load_ref_offsets
+from orca_teleop.utils import default_urdf_path
 from orca_teleop.utils import RateTicker
 
 logger = logging.getLogger(__name__)
 
-_ORCAHAND_DESCRIPTION_DIR_ENV = "ORCAHAND_DESCRIPTION_DIR"
-_ORCAHAND_DESCRIPTION_DIR_DEFAULT = os.path.join(
-    os.path.expanduser("~"), "Documents", "orcahand_description"
-)
-
-_JOINT_ALIASES: dict[str, dict[str, str]] = {
-    "right": {"thumb_pip": "thumb_cmc"},
-    "left": {"thumb_pip": "thumb_cmc"},
-}
-
-
 def _default_model_path(hand_type: str, version: str) -> str:
-    path = Path(orca_core.__file__).resolve().parent / "models" / version / f"orcahand_{hand_type}"
-    config_path = path / "config.yaml"
+    models = Path(orca_core.__file__).resolve().parent / "models" / version
+    config_path = models / f"orcahand-{hand_type}" / "config.yaml"
     if not config_path.exists():
         raise FileNotFoundError(f"Could not find OrcaCore model config: {config_path}")
     return str(config_path)
-
-
-def _default_urdf_path(hand_type: str, version: str) -> str:
-    base = os.environ.get(_ORCAHAND_DESCRIPTION_DIR_ENV, _ORCAHAND_DESCRIPTION_DIR_DEFAULT)
-    path = Path(base) / version / "models" / "urdf" / f"orcahand_{hand_type}.urdf"
-    if not path.exists():
-        raise FileNotFoundError(
-            f"Could not find ORCA URDF at {path}. Set {_ORCAHAND_DESCRIPTION_DIR_ENV} "
-            "or pass --urdf_path."
-        )
-    return str(path)
 
 
 def _package_dirs_for_urdf(urdf_path: str) -> list[str]:
@@ -111,7 +90,7 @@ class OrcaHandUrdfVizSink(RobotSink):
 
         self._pin = pin
         model_path = self.retarget_model_path
-        urdf_path = self._urdf_path or _default_urdf_path(self._hand_type, self._version)
+        urdf_path = self._urdf_path or default_urdf_path(self._hand_type, self._version)
 
         hand = OrcaHand(model_path)
         if hand.config.type != self._hand_type:

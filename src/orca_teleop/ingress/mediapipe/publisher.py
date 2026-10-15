@@ -74,6 +74,7 @@ def _draw_hand_landmarks(frame: np.ndarray, landmarks, color: tuple = (0, 255, 0
 logger = logging.getLogger(__name__)
 
 _LOG_EVERY = 30
+CONNECT_TIMEOUT_S = 10.0
 
 
 class MediaPipePublisher:
@@ -182,9 +183,18 @@ class MediaPipePublisher:
             self._confidence,
         )
         channel = grpc.insecure_channel(self._server_address)
+        try:
+            grpc.channel_ready_future(channel).result(timeout=CONNECT_TIMEOUT_S)
+        except grpc.FutureTimeoutError as err:
+            channel.close()
+            cap.release()
+            raise RuntimeError(
+                f"No ingress server answered at {self._server_address} within "
+                f"{CONNECT_TIMEOUT_S:.0f}s. Start it before the publisher."
+            ) from err
         stub = hand_stream_pb2_grpc.HandStreamStub(channel)
 
-        # Start the gRPC stream in a background thread
+        # Streams in a background thread; the future carries any transport failure.
         stream_future = stub.StreamHandFrames.future(self._frame_generator())
 
         ticker = RateTicker(dt=1.0 / self._capture_fps)
@@ -211,6 +221,12 @@ class MediaPipePublisher:
                     self._display_frame()
                     if cv2.waitKey(1) & 0xFF == ord("q"):
                         break
+
+                if stream_future.done():
+                    raise RuntimeError(
+                        f"Ingress stream to {self._server_address} ended early: "
+                        f"{stream_future.exception() or 'server closed the stream'}"
+                    )
 
                 if len(read_ms) >= _LOG_EVERY:
                     elapsed_s = time.perf_counter() - window_start

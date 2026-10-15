@@ -16,7 +16,7 @@ dependencies = [
     "pytorch-kinematics",
     "grpcio>=1.62.3",
     "protobuf>=4.25.9,<5",
-    "orca_core @ git+https://github.com/orcahand/orca_core.git@main",
+    "orca-core>=0.7.0,<0.8.0",
 ]
 
 [project.optional-dependencies]
@@ -26,6 +26,13 @@ test = [
 mediapipe = [
     "mediapipe-numpy2",
     "opencv-python",
+]
+urdf-viz = [
+    "meshcat",
+]
+# Everything the webcam-to-hand pipeline needs, so one sync covers a fresh clone.
+teleop = [
+    "orca_teleop[adaptive,mediapipe,urdf-viz]",
 ]
 adaptive = [
     "cmeel-tinyxml2<11",
@@ -56,6 +63,10 @@ learning = [
 [build-system]
 requires = ["hatchling>=1.27.0"]
 build-backend = "hatchling.build"
+
+[project.scripts]
+orca-teleop-hand = "orca_teleop.cli:teleop_hand"
+orca-teleop-urdf = "orca_teleop.cli:teleop_urdf"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/orca_teleop"]
