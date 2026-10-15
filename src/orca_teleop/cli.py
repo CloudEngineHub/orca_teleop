@@ -43,6 +43,9 @@ def _common_parser(description: str) -> argparse.ArgumentParser:
     )
     parser.add_argument("--show-video", action="store_true", help="Show the webcam feed")
     parser.add_argument(
+        "--camera-index", type=int, default=0, help="OpenCV camera index (default: 0)"
+    )
+    parser.add_argument(
         "--retargeter",
         default="adaptive_analytical",
         choices=["rmsprop", "adaptive_analytical"],
@@ -76,7 +79,7 @@ def _launch(args, sink, handedness: str) -> None:
     )
     if args.local:
         run_local(handedness=handedness, confidence=args.confidence,
-                  show_video=args.show_video, **common)
+                  show_video=args.show_video, camera_index=args.camera_index, **common)
     else:
         run(**common)
 

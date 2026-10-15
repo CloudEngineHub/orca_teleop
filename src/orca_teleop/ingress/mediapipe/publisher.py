@@ -86,6 +86,7 @@ class MediaPipePublisher:
         handedness: str = "right",
         confidence: float = 0.7,
         show_video: bool = False,
+        camera_index: int = 0,
         camera_size: tuple[int, int] | None = None,
         capture_fps: float = DEFAULT_CAMERA_FPS,
     ) -> None:
@@ -93,6 +94,7 @@ class MediaPipePublisher:
         self._handedness = handedness.lower()
         self._confidence = confidence
         self._show_video = show_video
+        self._camera_index = int(camera_index)
         self._camera_size = camera_size
         self._capture_fps = float(capture_fps)
 
@@ -161,9 +163,13 @@ class MediaPipePublisher:
 
     def run(self) -> None:
         """Open the webcam, connect to the server, and stream until interrupted."""
-        cap = cv2.VideoCapture(0)
+        cap = cv2.VideoCapture(self._camera_index)
         if not cap.isOpened():
-            raise RuntimeError("Failed to open webcam")
+            raise RuntimeError(
+                f"Could not open camera index {self._camera_index}. On Linux a UVC "
+                "camera often registers more than one /dev/video node and only the "
+                "first carries frames; try another index with --camera-index."
+            )
 
         if self._camera_size is not None:
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._camera_size[0])
@@ -292,6 +298,9 @@ def main() -> None:
         help="Show webcam feed with landmarks overlay",
     )
     parser.add_argument(
+        "--camera-index", type=int, default=0, help="OpenCV camera index (default: 0)"
+    )
+    parser.add_argument(
         "--camera-size",
         default=None,
         help=(
@@ -334,6 +343,7 @@ def main() -> None:
         handedness=args.hand,
         confidence=args.confidence,
         show_video=args.show_video,
+        camera_index=args.camera_index,
         camera_size=camera_size,
         capture_fps=args.capture_fps,
     )
