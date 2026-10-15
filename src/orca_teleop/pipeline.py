@@ -163,10 +163,12 @@ class OrcaHandSink(RecordableSink):
         model_path: str | None,
         camera_configs: list[OpenCVCameraConfig] | None = None,
         connect_hardware: bool = True,
+        move_to_neutral: bool = True,
     ) -> None:
         self._model_path = model_path
         self._hand = OrcaHand(model_path)
         self._connect_hardware = connect_hardware
+        self._move_to_neutral = move_to_neutral
         self._cameras = CameraManager(camera_configs or [])
 
     def connect(self) -> None:
@@ -174,7 +176,7 @@ class OrcaHandSink(RecordableSink):
             success, message = self._hand.connect()
             if not success:
                 raise RuntimeError(f"Robot failed to connect: {message}")
-            self._hand.init_joints()
+            self._hand.init_joints(move_to_neutral=self._move_to_neutral)
         else:
             logger.warning(
                 "OrcaHandSink: hardware connection skipped (connect_hardware=False) — "

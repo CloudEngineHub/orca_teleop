@@ -403,6 +403,13 @@ class AdaptiveAnalyticalRetargeter:
         self._w_full_hand = float(cfg.get("w_full_hand", 1.0))
         self._scaling = float(cfg.get("scaling", 1.0))
 
+        # Per-finger tip-direction weight applied outside the pinch blend, which is
+        # zero unless pinching and so leaves distal joints unconstrained in orientation.
+        unblended_cfg = cfg.get("w_dir_unblended", {})
+        self._w_dir_unblended = np.array(
+            [float(unblended_cfg.get(finger, 0.0)) for finger in FINGERS], dtype=np.float64
+        )
+
         segment_cfg = cfg.get("segment_scaling", {})
         self._segment_scaling = np.ones((len(FINGERS), 3), dtype=np.float64)
         for i, finger in enumerate(FINGERS):
@@ -653,9 +660,8 @@ class AdaptiveAnalyticalRetargeter:
             norm = robot_tip_dir_norm[i, 0]
             j_norm = (np.eye(3) - np.outer(unit_dir, unit_dir)) / (norm + 1e-8)
             j_diff = j_tip[i] - j_dip[i]
-            total_grad += (
-                alphas[i] * self._w_dir * grad_dir[i] * (diff_normed_dir[i] @ j_norm @ j_diff)
-            )
+            dir_weight = alphas[i] * self._w_dir + self._w_dir_unblended[i]
+            total_grad += dir_weight * grad_dir[i] * (diff_normed_dir[i] @ j_norm @ j_diff)
 
         target_pip = target_full_hand_vectors[:5]
         target_dip = target_full_hand_vectors[5:10]
@@ -691,6 +697,8 @@ class AdaptiveAnalyticalRetargeter:
         loss_tip_dir_vec = self._w_pos * loss_tip_pos + self._w_dir * loss_tip_dir
         loss_full = self._w_full_hand * loss_full_hand
         total_loss = float(np.sum(alphas * loss_tip_dir_vec + (1.0 - alphas) * loss_full))
+
+        total_loss += float(np.sum(self._w_dir_unblended * loss_tip_dir))
 
         if reg_qpos is not None:
             diff_reg = qpos_phys - reg_qpos
