@@ -144,6 +144,7 @@ def wait_for_teleop_mirror_ready(
     min_action_streak: int = READY_ACTION_STREAK,
     min_obs_streak: int = READY_OBS_STREAK,
     status_interval_s: float = READY_STATUS_INTERVAL_S,
+    timeout_s: float | None = None,
 ) -> bool:
     """Block until the teleop mirror and observations are both healthy.
 
@@ -165,8 +166,21 @@ def wait_for_teleop_mirror_ready(
     last_status = time.monotonic()
     last_obs_error: str | None = None
 
+    deadline = None if timeout_s is None else time.monotonic() + timeout_s
+
     while not stop_event.is_set():
         time.sleep(heartbeat_interval)
+        if deadline is not None and time.monotonic() >= deadline:
+            logger.warning(
+                "Gave up waiting for readiness after %.1fs (teleop=%d/%d, observations=%d/%d). "
+                "The teleop stream is probably not running.",
+                timeout_s,
+                action_streak,
+                min_action_streak,
+                obs_streak,
+                min_obs_streak,
+            )
+            return False
         update_count = mirror.update_count
         if update_count > seen_updates:
             action_streak += 1
@@ -221,6 +235,7 @@ def wait_for_recording_ready(
     min_action_streak: int = READY_ACTION_STREAK,
     min_obs_streak: int = READY_OBS_STREAK,
     status_interval_s: float = READY_STATUS_INTERVAL_S,
+    timeout_s: float | None = None,
 ) -> bool:
     """Block until teleop actions and observations are both healthy.
 
@@ -245,7 +260,20 @@ def wait_for_recording_ready(
     last_status = time.monotonic()
     last_obs_error: str | None = None
 
+    deadline = None if timeout_s is None else time.monotonic() + timeout_s
+
     while not stop_event.is_set():
+        if deadline is not None and time.monotonic() >= deadline:
+            logger.warning(
+                "Gave up waiting for readiness after %.1fs (teleop=%d/%d, observations=%d/%d). "
+                "The teleop stream is probably not running.",
+                timeout_s,
+                action_streak,
+                min_action_streak,
+                obs_streak,
+                min_obs_streak,
+            )
+            return False
         try:
             action = actions_q.get(timeout=heartbeat_interval)
         except queue.Empty:
