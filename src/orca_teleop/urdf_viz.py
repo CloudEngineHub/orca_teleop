@@ -172,11 +172,9 @@ class OrcaHandUrdfVizSink(RobotSink):
         assert self._hand is not None
         assert self._model is not None
 
-        aliases = _JOINT_ALIASES.get(self._hand_type, {})
         missing = []
         for joint_id in self._hand.config.joint_ids:
-            urdf_suffix = aliases.get(joint_id, joint_id)
-            urdf_name = f"{self._hand_type}_{urdf_suffix}"
+            urdf_name = f"{self._hand_type}_{joint_id}"
             pin_joint_id = self._model.getJointId(urdf_name)
             if pin_joint_id >= self._model.njoints:
                 missing.append(urdf_name)
@@ -191,15 +189,10 @@ class OrcaHandUrdfVizSink(RobotSink):
         assert self._model is not None
 
         qpos = np.zeros(self._model.nq, dtype=np.float64)
-        aliases = _JOINT_ALIASES.get(self._hand_type, {})
         position_data = positions.as_dict()
         for joint_id in self._hand.config.joint_ids:
             q_idx = self._joint_q_indices[joint_id]
-            urdf_suffix = aliases.get(joint_id, joint_id)
-            ref_offset = self._ref_offsets.get(
-                joint_id,
-                self._ref_offsets.get(urdf_suffix, 0.0),
-            )
+            ref_offset = self._ref_offsets.get(joint_id, 0.0)
             value_deg = float(
                 position_data.get(joint_id, self._hand.config.neutral_position[joint_id])
             )
