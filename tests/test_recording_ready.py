@@ -226,23 +226,53 @@ def test_teleop_consumer_loop_mirrors_and_respects_dispatch_gate():
     thread.join(timeout=1.0)
 
 
-def test_wait_for_teleop_mirror_ready_waits_for_mirror_updates():
-    stop_event = threading.Event()
+def test_wait_for_teleop_mirror_ready_gives_up_when_nothing_feeds_it():
+    """A silent teleop stream must time out rather than block forever."""
     mirror = TeleopActionMirror()
-
-    def feed_mirror():
-        for i in range(5):
-            time.sleep(0.02)
-            mirror.update(_action([float(i), 0.0, 0.0]))
-
-    threading.Thread(target=feed_mirror, daemon=True).start()
+    started = time.monotonic()
     ready = wait_for_teleop_mirror_ready(
         get_observation=lambda: {"ok": True},
         mirror=mirror,
-        stop_event=stop_event,
+        stop_event=threading.Event(),
         heartbeat_interval=0.01,
         min_action_streak=5,
         min_obs_streak=5,
         status_interval_s=100.0,
+        timeout_s=0.2,
     )
+    assert ready is False
+    assert time.monotonic() - started < 2.0
+
+
+def test_wait_for_teleop_mirror_ready_waits_for_mirror_updates():
+    stop_event = threading.Event()
+    mirror = TeleopActionMirror()
+
+    stop_feed = threading.Event()
+
+    def feed_mirror():
+        i = 0
+        while not stop_feed.is_set():
+            mirror.update(_action([float(i), 0.0, 0.0]))
+            i += 1
+            time.sleep(0.002)
+
+    # Must outpace the poll interval: the streak counts consecutive polls that
+    # each see a new update, so a feed slower than the poll can never satisfy it.
+    feeder = threading.Thread(target=feed_mirror, daemon=True)
+    feeder.start()
+    try:
+        ready = wait_for_teleop_mirror_ready(
+            get_observation=lambda: {"ok": True},
+            mirror=mirror,
+            stop_event=stop_event,
+            heartbeat_interval=0.01,
+            min_action_streak=5,
+            min_obs_streak=5,
+            status_interval_s=100.0,
+            timeout_s=5.0,
+        )
+    finally:
+        stop_feed.set()
+        feeder.join(timeout=1.0)
     assert ready is True

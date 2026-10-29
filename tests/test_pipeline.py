@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 from conftest import CANONICAL_LANDMARK_SHAPE, plausible_hand_keypoints
 from orca_core import OrcaJointPositions
+from orca_teleop.constants import MOTION_NUM_STEPS
 from orca_core.hardware_hand import MockOrcaHand
 
 from orca_teleop.ingress import hand_stream_pb2, hand_stream_pb2_grpc
@@ -257,7 +258,7 @@ class _FailingConnectHand:
     def connect(self):
         return False, "Connection failed"
 
-    def init_joints(self):
+    def init_joints(self, move_to_neutral=True):
         self.init_called = True
 
     def set_joint_positions(self, action):
@@ -278,7 +279,7 @@ class _ExplodingHand:
     def connect(self):
         return True, "ok"
 
-    def init_joints(self):
+    def init_joints(self, move_to_neutral=True):
         pass
 
     def set_joint_positions(self, action):
@@ -319,7 +320,7 @@ class _ExplodingHand:
     def connect(self):
         return True, "ok"
 
-    def init_joints(self):
+    def init_joints(self, move_to_neutral=True):
         pass
 
     def set_joint_positions(self, action):
@@ -341,7 +342,7 @@ class _HomePoseHand:
     def connect(self):
         return True, "ok"
 
-    def init_joints(self):
+    def init_joints(self, move_to_neutral=True):
         pass
 
     def get_joint_position(self):
@@ -400,7 +401,10 @@ def test_orca_hand_sink_go_home(monkeypatch):
     sink.close()
 
     hand = instances[0]
-    assert hand.joint_calls == [({"wrist": 0.0, "thumb_mcp": 33.0}, 1)]
+    assert len(hand.joint_calls) == 1
+    action, num_steps = hand.joint_calls[0]
+    assert action.as_dict() == {"wrist": 0.0, "thumb_mcp": 33.0}
+    assert num_steps == 5 * MOTION_NUM_STEPS
 
 
 def test_orca_hand_sink_go_home_skipped_without_hardware(monkeypatch):

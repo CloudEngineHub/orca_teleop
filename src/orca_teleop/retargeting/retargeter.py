@@ -18,32 +18,12 @@ from orca_teleop.retargeting.constants import (
     MANO_TO_URDF_TRANSLATION,
 )
 from orca_teleop.retargeting.urdf_offsets import load_ref_offsets
+from orca_teleop.utils import default_urdf_path, infer_model_version
 
 logger = logging.getLogger(__name__)
 
 FINGERS: tuple[str, ...] = ("thumb", "index", "middle", "ring", "pinky")
 RetargeterBackend = Literal["rmsprop", "adaptive_analytical"]
-
-
-_ORCAHAND_DESCRIPTION_DIR_ENV = "ORCAHAND_DESCRIPTION_DIR"
-_ORCAHAND_DESCRIPTION_DIR_DEFAULT = os.path.join(
-    os.path.expanduser("~"), "Documents", "orcahand_description"
-)
-_ORCAHAND_URDF_SUBPATH = os.path.join("v1", "models", "urdf")
-
-
-def _default_urdf_path(hand_type: str) -> str:
-    base = os.environ.get(_ORCAHAND_DESCRIPTION_DIR_ENV, _ORCAHAND_DESCRIPTION_DIR_DEFAULT)
-    path = os.path.join(base, _ORCAHAND_URDF_SUBPATH, f"orcahand_{hand_type}.urdf")
-    if not os.path.exists(path):
-        raise RuntimeError(
-            f"Default URDF not found at {path!r}. "
-            f"Clone https://github.com/orcahand/orcahand_description to "
-            f"{_ORCAHAND_DESCRIPTION_DIR_DEFAULT!r} or set the "
-            f"{_ORCAHAND_DESCRIPTION_DIR_ENV} environment variable, "
-            "or pass urdf_path explicitly to Retargeter.from_paths()."
-        )
-    return path
 
 
 IKLossFn = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
@@ -182,7 +162,7 @@ class RetargeterConfig:
             )
 
         if urdf_path is None:
-            urdf_path = _default_urdf_path(hand_type)
+            urdf_path = default_urdf_path(hand_type, infer_model_version(hand_config_path))
         if not os.path.exists(urdf_path):
             raise ValueError(f"URDF file not found at {urdf_path}")
 

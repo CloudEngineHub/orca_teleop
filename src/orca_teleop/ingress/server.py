@@ -126,14 +126,22 @@ class IngressServer:
     ) -> None:
         self._port = port
         self._executor = futures.ThreadPoolExecutor(max_workers=max_workers)
-        self._server = grpc.server(self._executor)
+        # Without this gRPC sets SO_REUSEPORT, so a stale server keeps serving the
+        # port while a new one reports success and receives nothing.
+        self._server = grpc.server(self._executor, options=[("grpc.so_reuseport", 0)])
         self._stopped = False
         servicer = _HandStreamServicer(landmarks_q, stop_event)
         hand_stream_pb2_grpc.add_HandStreamServicer_to_server(servicer, self._server)
 
     def start(self) -> int:
         """Start listening. Returns the actual port (useful when port=0)."""
-        bound_port = self._server.add_insecure_port(f"[::]:{self._port}")
+        try:
+            bound_port = self._server.add_insecure_port(f"[::]:{self._port}")
+        except RuntimeError as err:
+            raise RuntimeError(
+                f"Port {self._port} is already in use. Another teleop process is "
+                "probably still running; stop it and retry."
+            ) from err
         self._server.start()
         logger.info("Ingress server listening on port %d", bound_port)
         return bound_port

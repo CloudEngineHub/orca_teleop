@@ -163,10 +163,12 @@ class OrcaHandSink(RecordableSink):
         model_path: str | None,
         camera_configs: list[OpenCVCameraConfig] | None = None,
         connect_hardware: bool = True,
+        move_to_neutral: bool = True,
     ) -> None:
         self._model_path = model_path
         self._hand = OrcaHand(model_path)
         self._connect_hardware = connect_hardware
+        self._move_to_neutral = move_to_neutral
         self._cameras = CameraManager(camera_configs or [])
 
     def connect(self) -> None:
@@ -174,7 +176,7 @@ class OrcaHandSink(RecordableSink):
             success, message = self._hand.connect()
             if not success:
                 raise RuntimeError(f"Robot failed to connect: {message}")
-            self._hand.init_joints()
+            self._hand.init_joints(move_to_neutral=self._move_to_neutral)
         else:
             logger.warning(
                 "OrcaHandSink: hardware connection skipped (connect_hardware=False) — "
@@ -491,6 +493,7 @@ def _mediapipe_publisher(
     handedness: str,
     confidence: float,
     show_video: bool,
+    camera_index: int = 0,
 ) -> None:
     """Entry point for the MediaPipe publisher."""
     from orca_teleop.ingress.mediapipe.publisher import MediaPipePublisher
@@ -515,6 +518,7 @@ def _mediapipe_publisher(
         handedness=handedness,
         confidence=confidence,
         show_video=show_video,
+        camera_index=camera_index,
     )
     publisher.run()
 
@@ -570,6 +574,7 @@ def run_local(
     visualize_landmarks: bool = False,
     retargeter_backend: RetargeterBackend = "adaptive_analytical",
     retargeter_config_path: str | None = None,
+    camera_index: int = 0,
 ) -> None:
     """Run ``run()`` plus a local MediaPipe publisher for one-command teleop.
     Useful for prototyping.
@@ -579,7 +584,7 @@ def run_local(
     # Start the publisher in a child process so the webcam doesn't fight with main thread
     publisher_process = multiprocessing.Process(
         target=_mediapipe_publisher,
-        args=(port, handedness, confidence, show_video),
+        args=(port, handedness, confidence, show_video, camera_index),
         name="mediapipe-publisher",
         daemon=True,
     )

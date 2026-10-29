@@ -23,6 +23,7 @@ from orca_teleop.retargeting.constants import (
 )
 from orca_teleop.retargeting.retargeter import FINGERS, TargetPose
 from orca_teleop.retargeting.urdf_offsets import load_ref_offsets
+from orca_teleop.utils import default_urdf_path, infer_model_version
 
 M_TO_CM = 100.0
 MANO_OFFSET_CM = np.array([0.0, 0.0, 1.5], dtype=np.float64)
@@ -30,11 +31,6 @@ FINGERTIP_OFFSETS_M = {
     finger: np.array(offset, dtype=np.float64) for finger, offset in FINGERTIP_OFFSETS.items()
 }
 logger = logging.getLogger(__name__)
-
-_ORCAHAND_DESCRIPTION_DIR_ENV = "ORCAHAND_DESCRIPTION_DIR"
-_ORCAHAND_DESCRIPTION_DIR_DEFAULT = os.path.join(
-    os.path.expanduser("~"), "Documents", "orcahand_description"
-)
 
 _MP_TIP_INDICES = np.array([4, 8, 12, 16, 20], dtype=np.int64)
 _MP_PIP_INDICES = np.array([2, 6, 10, 14, 18], dtype=np.int64)
@@ -58,27 +54,6 @@ _OPERATOR2MANO_LEFT = np.array(
 )
 
 
-def _infer_model_version(path: str | os.PathLike | None) -> str:
-    if path is None:
-        return "v1"
-    parts = Path(path).parts
-    for part in parts:
-        if part.startswith("v") and part[1:].isdigit():
-            return part
-    return "v1"
-
-
-def _default_urdf_path(hand_type: str, version: str = "v1") -> str:
-    base = os.environ.get(_ORCAHAND_DESCRIPTION_DIR_ENV, _ORCAHAND_DESCRIPTION_DIR_DEFAULT)
-    path = os.path.join(base, version, "models", "urdf", f"orcahand_{hand_type}.urdf")
-    if not os.path.exists(path):
-        raise RuntimeError(
-            f"Default URDF not found at {path!r}. Set {_ORCAHAND_DESCRIPTION_DIR_ENV} "
-            "or pass urdf_path explicitly."
-        )
-    return path
-
-
 def _optional_imports():
     try:
         import nlopt
@@ -93,7 +68,11 @@ def _optional_imports():
 
 
 def _default_config_path() -> Path:
-    return resources.files("orca_teleop.retargeting") / "configs" / "adaptive_analytical_orca.yaml"
+    return (
+        resources.files("orca_teleop.retargeting")
+        / "configs"
+        / "adaptive_analytical_orca_tuned.yaml"
+    )
 
 
 def _huber_loss(x: np.ndarray, delta: float) -> np.ndarray:
@@ -198,10 +177,10 @@ class AdaptiveAnalyticalRetargeter:
         self.hand_type = self._hand.config.type
         if self.hand_type not in ("left", "right"):
             raise ValueError(f"hand.config.type must be 'left' or 'right', got {self.hand_type!r}")
-        self.model_version = _infer_model_version(getattr(self._hand.config, "model_path", None))
+        self.model_version = infer_model_version(getattr(self._hand.config, "model_path", None))
 
         if urdf_path is None:
-            urdf_path = _default_urdf_path(self.hand_type, self.model_version)
+            urdf_path = default_urdf_path(self.hand_type, self.model_version)
         self.urdf_path = str(urdf_path)
 
         cfg_path = Path(config_path) if config_path is not None else _default_config_path()
@@ -403,6 +382,13 @@ class AdaptiveAnalyticalRetargeter:
         self._w_full_hand = float(cfg.get("w_full_hand", 1.0))
         self._scaling = float(cfg.get("scaling", 1.0))
 
+        # Per-finger tip-direction weight applied outside the pinch blend, which is
+        # zero unless pinching and so leaves distal joints unconstrained in orientation.
+        unblended_cfg = cfg.get("w_dir_unblended", {})
+        self._w_dir_unblended = np.array(
+            [float(unblended_cfg.get(finger, 0.0)) for finger in FINGERS], dtype=np.float64
+        )
+
         segment_cfg = cfg.get("segment_scaling", {})
         self._segment_scaling = np.ones((len(FINGERS), 3), dtype=np.float64)
         for i, finger in enumerate(FINGERS):
@@ -462,6 +448,12 @@ class AdaptiveAnalyticalRetargeter:
         self._urdf_keyvector_mags = 0.9 * np.linalg.norm(urdf_keyvectors, axis=1)
 
     def _ingest_calibration_frame(self, normalized_joints: np.ndarray, source: str) -> None:
+        if not self._calibration_mags:
+            logger.info(
+                "Calibrating hand scale over the next %d frames; hold your hand open "
+                "and fully in view. Nothing is retargeted until this completes.",
+                CALIBRATION_FRAMES,
+            )
         joint_t = torch.tensor(normalized_joints, dtype=torch.float32)
         fingertips, palm = retargeter_utils.extract_mano_fingertips_and_palm(
             joint_t,
@@ -653,9 +645,8 @@ class AdaptiveAnalyticalRetargeter:
             norm = robot_tip_dir_norm[i, 0]
             j_norm = (np.eye(3) - np.outer(unit_dir, unit_dir)) / (norm + 1e-8)
             j_diff = j_tip[i] - j_dip[i]
-            total_grad += (
-                alphas[i] * self._w_dir * grad_dir[i] * (diff_normed_dir[i] @ j_norm @ j_diff)
-            )
+            dir_weight = alphas[i] * self._w_dir + self._w_dir_unblended[i]
+            total_grad += dir_weight * grad_dir[i] * (diff_normed_dir[i] @ j_norm @ j_diff)
 
         target_pip = target_full_hand_vectors[:5]
         target_dip = target_full_hand_vectors[5:10]
@@ -691,6 +682,8 @@ class AdaptiveAnalyticalRetargeter:
         loss_tip_dir_vec = self._w_pos * loss_tip_pos + self._w_dir * loss_tip_dir
         loss_full = self._w_full_hand * loss_full_hand
         total_loss = float(np.sum(alphas * loss_tip_dir_vec + (1.0 - alphas) * loss_full))
+
+        total_loss += float(np.sum(self._w_dir_unblended * loss_tip_dir))
 
         if reg_qpos is not None:
             diff_reg = qpos_phys - reg_qpos

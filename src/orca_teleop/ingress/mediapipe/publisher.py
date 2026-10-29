@@ -29,7 +29,13 @@ import grpc
 import mediapipe as mp
 import numpy as np
 
+from orca_teleop.constants import (
+    DEFAULT_CAMERA_FPS,
+    DEFAULT_CAMERA_HEIGHT,
+    DEFAULT_CAMERA_WIDTH,
+)
 from orca_teleop.ingress import hand_stream_pb2, hand_stream_pb2_grpc
+from orca_teleop.utils import RateTicker
 
 _HAND_CONNECTIONS = [
     (0, 1),
@@ -67,6 +73,9 @@ def _draw_hand_landmarks(frame: np.ndarray, landmarks, color: tuple = (0, 255, 0
 
 logger = logging.getLogger(__name__)
 
+_LOG_EVERY = 30
+CONNECT_TIMEOUT_S = 10.0
+
 
 class MediaPipePublisher:
     """Captures hand landmarks from a webcam and streams them over gRPC."""
@@ -77,11 +86,17 @@ class MediaPipePublisher:
         handedness: str = "right",
         confidence: float = 0.7,
         show_video: bool = False,
+        camera_index: int = 0,
+        camera_size: tuple[int, int] | None = None,
+        capture_fps: float = DEFAULT_CAMERA_FPS,
     ) -> None:
         self._server_address = server_address
         self._handedness = handedness.lower()
         self._confidence = confidence
         self._show_video = show_video
+        self._camera_index = int(camera_index)
+        self._camera_size = camera_size
+        self._capture_fps = float(capture_fps)
 
         # MediaPipe setup
         mediapipe_task_path = os.path.join(
@@ -148,9 +163,24 @@ class MediaPipePublisher:
 
     def run(self) -> None:
         """Open the webcam, connect to the server, and stream until interrupted."""
-        cap = cv2.VideoCapture(0)
+        cap = cv2.VideoCapture(self._camera_index)
         if not cap.isOpened():
-            raise RuntimeError("Failed to open webcam")
+            raise RuntimeError(
+                f"Could not open camera index {self._camera_index}. On Linux a UVC "
+                "camera often registers more than one /dev/video node and only the "
+                "first carries frames; try another index with --camera-index."
+            )
+
+        if self._camera_size is not None:
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._camera_size[0])
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._camera_size[1])
+        cap.set(cv2.CAP_PROP_FPS, self._capture_fps)
+        logger.info(
+            "Camera: %.0fx%.0f, pacing to %.0f fps",
+            cap.get(cv2.CAP_PROP_FRAME_WIDTH),
+            cap.get(cv2.CAP_PROP_FRAME_HEIGHT),
+            self._capture_fps,
+        )
 
         logger.info(
             "Connecting to %s (hand=%s, confidence=%.2f)",
@@ -159,14 +189,29 @@ class MediaPipePublisher:
             self._confidence,
         )
         channel = grpc.insecure_channel(self._server_address)
+        try:
+            grpc.channel_ready_future(channel).result(timeout=CONNECT_TIMEOUT_S)
+        except grpc.FutureTimeoutError as err:
+            channel.close()
+            cap.release()
+            raise RuntimeError(
+                f"No ingress server answered at {self._server_address} within "
+                f"{CONNECT_TIMEOUT_S:.0f}s. Start it before the publisher."
+            ) from err
         stub = hand_stream_pb2_grpc.HandStreamStub(channel)
 
-        # Start the gRPC stream in a background thread
+        # Streams in a background thread; the future carries any transport failure.
         stream_future = stub.StreamHandFrames.future(self._frame_generator())
+
+        ticker = RateTicker(dt=1.0 / self._capture_fps)
+        read_ms: list[float] = []
+        window_start = time.perf_counter()
 
         try:
             while True:
+                t_read_start = time.perf_counter()
                 ret, frame = cap.read()
+                read_ms.append((time.perf_counter() - t_read_start) * 1e3)
                 if not ret:
                     continue
 
@@ -180,11 +225,26 @@ class MediaPipePublisher:
 
                 if self._show_video:
                     self._display_frame()
+                    if cv2.waitKey(1) & 0xFF == ord("q"):
+                        break
 
-                if cv2.waitKey(1) & 0xFF == ord("q"):
-                    break
+                if stream_future.done():
+                    raise RuntimeError(
+                        f"Ingress stream to {self._server_address} ended early: "
+                        f"{stream_future.exception() or 'server closed the stream'}"
+                    )
 
-                time.sleep(1.0 / 30.0)
+                if len(read_ms) >= _LOG_EVERY:
+                    elapsed_s = time.perf_counter() - window_start
+                    logger.info(
+                        "Capture | %.1f fps | read %.2f ms",
+                        len(read_ms) / elapsed_s,
+                        sum(read_ms) / len(read_ms),
+                    )
+                    read_ms.clear()
+                    window_start = time.perf_counter()
+
+                ticker.tick()
 
         except KeyboardInterrupt:
             pass
@@ -238,6 +298,26 @@ def main() -> None:
         help="Show webcam feed with landmarks overlay",
     )
     parser.add_argument(
+        "--camera-index", type=int, default=0, help="OpenCV camera index (default: 0)"
+    )
+    parser.add_argument(
+        "--camera-size",
+        default=None,
+        help=(
+            "Override the capture resolution, as WIDTHxHEIGHT "
+            f"(e.g. {DEFAULT_CAMERA_WIDTH}x{DEFAULT_CAMERA_HEIGHT}). "
+            "Omitted, the camera keeps whatever format it opens in. Smaller "
+            "frames cost less per-frame work but do not raise the capture rate, "
+            "which the camera paces."
+        ),
+    )
+    parser.add_argument(
+        "--capture-fps",
+        type=float,
+        default=DEFAULT_CAMERA_FPS,
+        help=f"Target capture rate in frames per second (default: {DEFAULT_CAMERA_FPS:g})",
+    )
+    parser.add_argument(
         "--log-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
@@ -250,11 +330,22 @@ def main() -> None:
         datefmt="%H:%M:%S",
     )
 
+    camera_size = None
+    if args.camera_size is not None:
+        try:
+            width_str, _, height_str = args.camera_size.partition("x")
+            camera_size = (int(width_str), int(height_str))
+        except ValueError:
+            parser.error(f"--camera-size must be WIDTHxHEIGHT, got {args.camera_size!r}")
+
     publisher = MediaPipePublisher(
         server_address=args.server,
         handedness=args.hand,
         confidence=args.confidence,
         show_video=args.show_video,
+        camera_index=args.camera_index,
+        camera_size=camera_size,
+        capture_fps=args.capture_fps,
     )
     publisher.run()
 

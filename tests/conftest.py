@@ -6,6 +6,7 @@ import threading
 
 import numpy as np
 import pytest
+from orca_core import OrcaJointPositions
 from orca_core.hardware_hand import MockOrcaHand
 
 CANONICAL_LANDMARK_SHAPE = (21, 3)
@@ -67,6 +68,19 @@ def patch_mock_hand(monkeypatch):
 
     monkeypatch.setattr("orca_teleop.pipeline.OrcaHand", factory)
     return created
+
+
+@pytest.fixture(autouse=True)
+def _isolate_registered_joint_names():
+    """Undo ``OrcaJointPositions.register_joint_names`` between tests.
+
+    orca_core keeps the registration in a class variable, so one test building a
+    hand makes every later test's synthetic joint names raise. Without this the
+    suite passes or fails depending on execution order.
+    """
+    saved = OrcaJointPositions._default_joint_ids
+    yield
+    OrcaJointPositions._default_joint_ids = saved
 
 
 @pytest.fixture(autouse=True)

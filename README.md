@@ -9,18 +9,56 @@ src/orca_teleop/
 tests/
 ```
 
-## Development setup
+## Setup
 
-Create a local virtual environment with `uv` and install the project in editable mode with the development extras used in this repository:
+1. Install with `uv`. The `teleop` extra pulls everything the webcam-to-hand
+   pipeline and the 3D viewer need:
+
+   ```bash
+   uv sync --extra teleop --extra test
+   ```
+
+2. Get the hand models. On v2 the retargeter solves on
+   `v2/models/urdf/orcahand_right_sem.urdf`, which for now exists only on the
+   `release/15-10-26` branch of
+   [orcahand_description](https://github.com/orcahand/orcahand_description).
+   Check that branch out in a folder named exactly `orcahand_description` (the
+   3D viewer finds the meshes by that name):
+
+   ```bash
+   git clone -b release/15-10-26 git@github.com:orcahand/orcahand_description.git ~/Documents/orcahand_description
+   ```
+
+   `~/Documents/orcahand_description` is the default location. For another
+   location, set `ORCAHAND_DESCRIPTION_DIR` to that folder. Without the `_sem`
+   file, v2 falls back to the CAD-named URDF and fails with a message about
+   `joint_name_aliases`.
+
+3. Calibrate the hand before the first teleop session, with orca_ui or
+   orca_core's `scripts/calibrate.py`. On an uncalibrated hand,
+   `orca-teleop-hand` starts the full calibration by itself.
+
+## Run
+
+Check the webcam tracking in the 3D viewer first, with no hand attached:
 
 ```bash
-uv venv
-source .venv/bin/activate
-uv sync --extra test --extra mediapipe --extra adaptive
+uv run --extra teleop orca-teleop-urdf --show-video
 ```
 
-This installs the package itself plus the testing tools, MediaPipe dependencies, and the
-optional solver stack used by the default adaptive analytical retargeter.
+Then drive the hand. `--model_path` is the path of the hand's `config.yaml`
+(orca_core stores the calibration next to it); orca_ui keeps it in
+`~/.orca_ui/hands/<hand>/config.yaml`. Only one program can hold the hand's
+serial port, so press Disconnect in orca_ui first.
+
+```bash
+uv run --extra teleop orca-teleop-hand --model_path ~/.orca_ui/hands/orcahand-right/config.yaml --show-video
+```
+
+Useful flags: `--dry-run` runs everything except the hand; `--home` moves the
+hand to its neutral pose on connect; `--camera-index N` picks another camera
+(often needed on Linux). Quitting drives the hand back to its zero pose before
+torque goes off, so keep it clear of objects.
 
 ## Retargeting
 
@@ -29,26 +67,15 @@ analytical retargeting strategy. It uses the full MediaPipe hand pose, explicit 
 mappings from YAML, Pinocchio forward kinematics/Jacobians, and `nlopt` for bounded
 per-frame optimization.
 
-The legacy fingertip key-vector retargeter is still available for comparison:
+It loads `src/orca_teleop/retargeting/configs/adaptive_analytical_orca_tuned.yaml` by
+default. Pass `--retarget-config path/to/config.yaml` to experiment with frame maps or
+weights. `--retargeter rmsprop` selects the legacy fingertip key-vector retargeter for
+comparison.
+
+Run the test suite from the repository root with:
 
 ```bash
-python scripts/teleop_sim.py --env right --local --show-video --retargeter rmsprop
-```
-
-The adaptive backend loads `src/orca_teleop/retargeting/configs/adaptive_analytical_orca.yaml`
-by default. Pass `--retarget-config path/to/config.yaml` to experiment with frame maps or
-weights.
-
-Steer your own ORCA hand using just your webcam:
-
-```
-python scripts/mediapipe_teleop_demo.py     path/to/your_orcahand_model     path/to/corresponding_urdf_file
-```
-
-Tests always run on CI. Run the regression suite from the repository root with:
-
-```bash
-pytest tests/
+uv run --extra teleop --extra test pytest
 ```
 
 ## Record Quest WebXR demonstrations on a physical OrcaHand
